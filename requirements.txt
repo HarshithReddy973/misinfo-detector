@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+pandas
+pyarrow
+scikit-learn
+xgboost
+shap
+sentence-transformers
+transformers
+torch
+streamlit
+requests

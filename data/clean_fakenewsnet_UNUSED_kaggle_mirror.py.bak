@@ -1,0 +1,81 @@
+"""
+Maps raw FakeNewsNet CSVs into the unified schema.
+
+GETTING THE DATA (do this before running this script):
+Option 1 (recommended for a 5-day hackathon — much faster):
+    Use the pre-scraped Kaggle mirror: search "FakeNewsNet.csv" on Kaggle
+    (mdepak/fakenewsnet or similar). It ships title, text, news_url,
+    source_domain, tweet_num, real — already scraped, no Twitter API needed.
+    Download it to data/raw/fakenewsnet_raw.csv
+
+Option 2 (the "correct" but slow way):
+    Clone https://github.com/KaiDMML/FakeNewsNet — it only ships article IDs
+    and URLs by default; you then run their fetching scripts to scrape full
+    text + Twitter engagement data, which needs API keys and takes hours.
+    Skip this unless you have >1 day of slack — you don't.
+
+Expected raw columns (Kaggle mirror): title, text, news_url, source_domain, tweet_num, real
+Adjust COLUMN_MAP below if your CSV's column names differ.
+"""
+import re
+import html
+import unicodedata
+import pandas as pd
+from schema import REQUIRED_COLUMNS, validate_dataframe
+
+RAW_PATH = "data/raw/fakenewsnet_raw.csv"
+OUT_PATH = "data/processed/fakenewsnet_clean.parquet"
+
+# map raw column name -> unified column name
+COLUMN_MAP = {
+    "title": "title",
+    "text": "raw_text",
+    "source_domain": "source",
+    "tweet_num": "share_count",
+    "real": "label",
+}
+
+
+def clean_text(text: str) -> str:
+    """Cleaned copy for modeling — keep raw_text separately for stylistic features."""
+    if not isinstance(text, str):
+        return ""
+    text = html.unescape(text)
+    text = unicodedata.normalize("NFKC", text)
+    text = re.sub(r"http\S+|www\.\S+", " ", text)   # strip URLs
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def load_and_map(raw_path: str = RAW_PATH) -> pd.DataFrame:
+    raw = pd.read_csv(raw_path)
+    raw = raw.rename(columns=COLUMN_MAP)
+
+    df = pd.DataFrame()
+    df["id"] = [f"fnn_{i:05d}" for i in range(len(raw))]
+    df["raw_text"] = raw.get("raw_text", "").fillna("")
+    df["text"] = df["raw_text"].apply(clean_text)
+    df["title"] = raw.get("title", "").fillna("")
+    df["source"] = raw.get("source", "unknown").fillna("unknown")
+    df["author"] = "unknown"          # FakeNewsNet mirror doesn't ship author reliably
+    df["timestamp"] = ""              # not available in most mirrors — flag as known gap
+    df["share_count"] = pd.to_numeric(raw.get("share_count", 0), errors="coerce").fillna(0).astype(int)
+    df["reply_count"] = 0             # not available — flag as known gap
+    df["dataset_source"] = "fakenewsnet"
+
+    # FakeNewsNet's "real" column is usually 1=real, 0=fake — adjust if inverted in your mirror
+    df["label"] = raw["label"].apply(lambda v: "real" if int(v) == 1 else "fake")
+
+    df = df[REQUIRED_COLUMNS]
+    df = df[df["text"].str.len() > 20]   # drop near-empty rows
+    return df
+
+
+if __name__ == "__main__":
+    df = load_and_map()
+    validate_dataframe(df)
+    import os
+    os.makedirs("data/processed", exist_ok=True)
+    df.to_parquet(OUT_PATH, index=False)
+    print(f"Saved {len(df)} cleaned rows to {OUT_PATH}")
+    print(df["label"].value_counts())
