@@ -11,3 +11,10 @@ transformers
 torch
 streamlit
 requests
+
+numpy
+joblib
+textblob
+textstat
+nltk
+

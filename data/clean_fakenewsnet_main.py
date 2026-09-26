@@ -29,7 +29,8 @@ OUT_PATH = "data/processed/fakenewsnet_main_clean.parquet"
 FILES = [
     ("BuzzFeed_fake_news_content.csv", "fake", "buzzfeed"),
     ("BuzzFeed_real_news_content.csv", "real", "buzzfeed"),
-   
+    ("PolitiFact_fake_news_content.csv", "fake", "politifact"),
+    ("PolitiFact_real_news_content.csv", "real", "politifact"),
 ]
 
 
