@@ -6,10 +6,15 @@ Columns per LIAR's README (no header row in the TSV):
 7 state | 8 party | 9 barely_true_ct | 10 false_ct | 11 half_true_ct |
 12 mostly_true_ct | 13 pants_fire_ct | 14 context
 
-Label collapse (deliberate 3-way, not forced binary — see team notes):
+Label collapse — binary training labels + one excluded class:
   true, mostly-true        -> real
-  half-true, barely-true   -> uncertain
   false, pants-fire        -> fake
+  half-true, barely-true   -> ambiguous (EXCLUDED from train/valid/test —
+                               never trained or evaluated on directly;
+                               used only in split_dataset.py's separate
+                               calibration_eval.parquet, to check whether
+                               the trained model's confidence dips on
+                               genuinely ambiguous statements it never saw)
 """
 import os
 import re
@@ -26,8 +31,8 @@ COLS = [
 LABEL_MAP = {
     "true": "real",
     "mostly-true": "real",
-    "half-true": "uncertain",
-    "barely-true": "uncertain",
+    "half-true": "ambiguous",     # excluded from training — see split_dataset.py
+    "barely-true": "ambiguous",   # excluded from training — see split_dataset.py
     "false": "fake",
     "pants-fire": "fake",
 }

@@ -34,6 +34,26 @@ notebooks/   # EDA, split strategy, experiments
 - Person B: LIAR cleaning + train/test split strategy (see `data/NOTES.md` once A pushes it)
 - Person C: this repo skeleton + `api/` dummy endpoint
 
+## Data setup (do this before running anything that needs data)
+`data/raw/` and `data/processed/` are gitignored on purpose — raw
+datasets aren't ours to redistribute, and generated files bloat the repo.
+Every teammate regenerates them locally:
+
+1. Download the raw datasets yourself:
+   - ISOT: `True.csv`, `Fake.csv` → `data/raw/isot/`
+   - LIAR: `train.tsv`, `valid.tsv`, `test.tsv` → `data/raw/liar/`
+   - FakeNewsNet (Kaggle mdepak/fakenewsnet): the 4 `*_news_content.csv`
+     files → `data/raw/fakenewsnet/`
+2. From the repo root, run:
+   ```bash
+   python data/clean_isot.py
+   python data/clean_liar.py
+   python data/clean_fakenewsnet_main.py
+   python data/merge_all.py
+   ```
+3. This produces `data/processed/combined_clean.parquet` — the file the
+   model track trains on and Person B splits into train/test.
+
 ## Status
 - [x] Day 1: schema locked, dummy API running, FakeNewsNet cleaned
 - [ ] Day 2: baseline model, dashboard shell

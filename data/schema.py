@@ -17,7 +17,8 @@ REQUIRED_COLUMNS = [
     "source",        # str — publisher/domain name, "unknown" if missing
     "author",        # str — author name, "unknown" if missing
     "timestamp",     # str (ISO 8601) or "" if missing
-    "label",         # str — "real" | "fake" | "uncertain"  (LIAR's 6-way collapses to this 3-way)
+    "label",         # str — "real" | "fake" | "ambiguous"  (ambiguous = LIAR's half-true/
+                      #       barely-true rows, EXCLUDED from train/valid/test — see split_dataset.py)
     "share_count",   # int — 0 if not available
     "reply_count",   # int — 0 if not available
     "dataset_source",# str — "fakenewsnet" | "liar" | ... (so you can trace provenance)
@@ -35,15 +36,15 @@ class UnifiedRecord:
     source: str
     author: str
     timestamp: str
-    label: str          # must be "real" or "fake"
+    label: str          # "real" | "fake" | "ambiguous" (ambiguous excluded from training)
     share_count: int
     reply_count: int
     dataset_source: str
     official_split: str = ""   # "train"|"valid"|"test" if the source has a canonical split, else ""
 
     def __post_init__(self):
-        if self.label not in ("real", "fake", "uncertain"):
-            raise ValueError(f"label must be 'real', 'fake', or 'uncertain', got {self.label!r}")
+        if self.label not in ("real", "fake", "ambiguous"):
+            raise ValueError(f"label must be 'real', 'fake', or 'ambiguous', got {self.label!r}")
 
     def to_dict(self):
         return asdict(self)
@@ -55,7 +56,7 @@ def validate_dataframe(df: pd.DataFrame) -> None:
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    bad_labels = df[~df["label"].isin(["real", "fake", "uncertain"])]
+    bad_labels = df[~df["label"].isin(["real", "fake", "ambiguous"])]
     if len(bad_labels):
         raise ValueError(f"{len(bad_labels)} rows have invalid labels: {bad_labels['label'].unique()}")
 
