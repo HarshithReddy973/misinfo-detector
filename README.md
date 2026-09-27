@@ -67,11 +67,16 @@ models/  # calibrated_model.joblib
 notebooks/
 ```
 
+## Batch analysis & review queue
+- Upload a CSV (needs a `text` column, optional `title`/`source`/`author`) in the **Batch Analysis** tab — every row is scored and stored, with aggregate counts + a CSV export.
+- The **Review Queue** tab lists every analyzed item (single + batch), sorted by confidence ascending by default (least-confident items surface first). Confirm/dismiss/relabel each item — every action is logged in an append-only `feedback` table; the original model prediction is never overwritten, only a separate `review_status` flag changes.
+- All of this is backed by SQLite (`data/app.db`, gitignored — regenerates automatically on first run).
+
 ## Status
 - [x] Data pipeline (4 datasets → schema → clean → merge → split)
 - [x] Model trained + calibrated, SHAP explainability
 - [x] API wired to real model
 - [x] Frontend (submission form, results, credibility, explanation)
-- [ ] Batch inference + CSV export
-- [ ] Human review / decision tracker (append-only feedback log)
+- [x] Batch inference + CSV export
+- [x] Human review / decision tracker (append-only feedback log)
 - [ ] Evaluation write-up, midterm report, demo video

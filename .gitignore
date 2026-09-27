@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 data/raw/
 data/processed/
+data/app.db
+data/app.db-*
 .env
 *.pt
 *.pkl

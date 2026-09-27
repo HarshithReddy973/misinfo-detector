@@ -26,6 +26,7 @@ class SignalStrengths(BaseModel):
 
 
 class PredictResponse(BaseModel):
+    prediction_id: Optional[str] = None    # DB id -- needed to submit reviewer feedback on this item later
     label: str                       # "real" | "fake" | "uncertain" (uncertain = low-confidence band, not a trained class)
     confidence: float                # calibrated, 0-1 -- confidence in whichever of real/fake the model voted for
     review_priority: str             # "uncertain" | "moderate" | "high" -- for sorting the reviewer queue
@@ -38,3 +39,22 @@ class PredictResponse(BaseModel):
     source_credibility: Optional[float] = None    # 1 - source_fake_ratio (higher = more credible)
     source_known: Optional[bool] = None            # False = source wasn't in the training credibility DB
     author_known: Optional[bool] = None
+
+
+class FeedbackRequest(BaseModel):
+    action: str                          # "confirm" | "dismiss" | "relabel"
+    corrected_label: Optional[str] = None   # required when action == "relabel"
+    note: Optional[str] = None
+
+
+class BatchItemResult(BaseModel):
+    row_index: int
+    text: str
+    prediction: PredictResponse
+    prediction_id: str
+
+
+class BatchSummary(BaseModel):
+    batch_id: str
+    total_items: int
+    label_counts: dict

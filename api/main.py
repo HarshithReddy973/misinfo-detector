@@ -1,20 +1,30 @@
 """
-Prediction API -- wired to the REAL trained model (model/inference.py).
+Prediction API -- real model (model/inference.py) + persistence (db.py) for
+the reviewer queue and human-in-the-loop feedback.
 
 Run with:  uvicorn main:app --reload --port 8000   (from inside api/)
 """
+import io
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, HTTPException
+import pandas as pd
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
-from schemas import PredictRequest, PredictResponse, ExplanationFeature, SignalStrengths
+from fastapi.responses import StreamingResponse
+from schemas import (
+    PredictRequest, PredictResponse, ExplanationFeature, SignalStrengths,
+    FeedbackRequest, BatchSummary,
+)
 
 from model import inference
+import db
 
-app = FastAPI(title="Misinformation Detector API", version="0.3.0")
+db.init_db()
+
+app = FastAPI(title="Misinformation Detector API", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,7 +54,6 @@ def _direction(value: float) -> str:
 def _build_explanation(shap_result) -> list[ExplanationFeature]:
     if shap_result is None:
         return []
-
     rows = [
         ExplanationFeature(feature="linguistic_signal", contribution=shap_result["linguistic_signal"]),
         ExplanationFeature(feature="semantic_signal", contribution=shap_result["semantic_signal"]),
@@ -57,10 +66,10 @@ def _build_explanation(shap_result) -> list[ExplanationFeature]:
     return rows
 
 
-@app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest) -> PredictResponse:
+def _run_prediction(text: str, source: str, author: str) -> tuple[PredictResponse, dict]:
+    """Shared by /predict and batch processing. Returns (response_model, raw_result_dict)."""
     try:
-        result = inference.predict(req.text, req.source or "", req.author or "")
+        result = inference.predict(text, source or "", author or "")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
 
@@ -75,8 +84,6 @@ def predict(req: PredictRequest) -> PredictResponse:
             semantic=shap_result["semantic_strength"],
             credibility=shap_result["credibility_strength"],
         )
-        # same "strongest wins" logic predict_raw.py used -- whichever block
-        # has the largest |contribution| is the one driving the prediction
         strengths = {
             "linguistic": shap_result["linguistic_strength"],
             "semantic": shap_result["semantic_strength"],
@@ -90,7 +97,7 @@ def predict(req: PredictRequest) -> PredictResponse:
         }[main_signal]
         main_signal_direction = _direction(main_signal_value)
 
-    return PredictResponse(
+    response = PredictResponse(
         label=result["label"],
         confidence=result["confidence"],
         review_priority=result["review_priority"],
@@ -104,8 +111,113 @@ def predict(req: PredictRequest) -> PredictResponse:
         source_known=result["source_known"],
         author_known=result["author_known"],
     )
+    return response, result
 
 
-@app.post("/predict/batch")
+@app.post("/predict", response_model=PredictResponse)
+def predict(req: PredictRequest) -> PredictResponse:
+    response, result = _run_prediction(req.text, req.source, req.author)
+    explanation_list = [e.model_dump() for e in response.explanation]
+    pred_id = db.save_prediction(req.text, req.title, req.source, req.author, result, explanation_list)
+    response.prediction_id = pred_id
+    return response
+
+
+# --- Batch analysis ---
+
+@app.post("/predict/batch", response_model=list[PredictResponse])
 def predict_batch(requests: list[PredictRequest]) -> list[PredictResponse]:
-    return [predict(r) for r in requests]
+    """JSON-list batch endpoint -- convenient for testing/scripting. For the
+    PS's file-upload batch requirement, use /predict/batch/csv instead."""
+    batch_id = db.create_batch(filename=None)
+    results = []
+    for req in requests:
+        response, result = _run_prediction(req.text, req.source, req.author)
+        explanation_list = [e.model_dump() for e in response.explanation]
+        pred_id = db.save_prediction(req.text, req.title, req.source, req.author, result, explanation_list, batch_id=batch_id)
+        response.prediction_id = pred_id
+        results.append(response)
+    return results
+
+
+@app.post("/predict/batch/csv", response_model=BatchSummary)
+async def predict_batch_csv(file: UploadFile = File(...)):
+    """Upload a CSV with at least a 'text' column (optional 'source', 'author', 'title').
+    Runs every row through the model and stores results under one batch_id."""
+    raw = await file.read()
+    try:
+        df = pd.read_csv(io.BytesIO(raw))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Couldn't parse CSV: {e}")
+
+    if "text" not in df.columns:
+        raise HTTPException(status_code=400, detail="CSV must have a 'text' column")
+
+    batch_id = db.create_batch(file.filename)
+
+    for _, row in df.iterrows():
+        text = str(row.get("text", "") or "")
+        if not text.strip():
+            continue
+        source = str(row.get("source", "") or "")
+        author = str(row.get("author", "") or "")
+        title = str(row.get("title", "") or "")
+        response, result = _run_prediction(text, source, author)
+        explanation_list = [e.model_dump() for e in response.explanation]
+        db.save_prediction(text, title, source, author, result, explanation_list, batch_id=batch_id)
+
+    return BatchSummary(**db.get_batch_summary(batch_id))
+
+
+@app.get("/batches/{batch_id}/export.csv")
+def export_batch_csv(batch_id: str):
+    rows = db.get_predictions(batch_id=batch_id, limit=100000)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Batch not found or empty")
+    df = pd.DataFrame(rows)
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=batch_{batch_id}.csv"},
+    )
+
+
+# --- Reviewer queue / human-in-the-loop ---
+
+@app.get("/queue")
+def get_queue(
+    review_status: str = Query(default=None),
+    label: str = Query(default=None),
+    source: str = Query(default=None),
+    batch_id: str = Query(default=None),
+    sort_by: str = Query(default="confidence"),
+    sort_dir: str = Query(default="asc"),
+    limit: int = Query(default=200),
+):
+    return db.get_predictions(
+        review_status=review_status, label=label, source=source, batch_id=batch_id,
+        sort_by=sort_by, sort_dir=sort_dir, limit=limit,
+    )
+
+
+@app.get("/predictions/{prediction_id}")
+def get_prediction_detail(prediction_id: str):
+    pred = db.get_prediction(prediction_id)
+    if not pred:
+        raise HTTPException(status_code=404, detail="Not found")
+    pred["feedback_history"] = db.get_feedback_history(prediction_id)
+    return pred
+
+
+@app.post("/predictions/{prediction_id}/feedback")
+def submit_feedback(prediction_id: str, req: FeedbackRequest):
+    if not db.get_prediction(prediction_id):
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    try:
+        feedback_id = db.add_feedback(prediction_id, req.action, req.corrected_label, req.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"feedback_id": feedback_id, "status": "ok"}
