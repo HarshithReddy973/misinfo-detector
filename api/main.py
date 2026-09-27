@@ -187,18 +187,26 @@ def export_batch_csv(batch_id: str):
 
 # --- Reviewer queue / human-in-the-loop ---
 
+@app.get("/batches")
+def list_batches():
+    """Batch groups + a pseudo-group for ungrouped single-analysis items, each
+    with counts -- used by the Review Queue's group list before drilling in."""
+    return db.get_batches()
+
+
 @app.get("/queue")
 def get_queue(
     review_status: str = Query(default=None),
     label: str = Query(default=None),
     source: str = Query(default=None),
     batch_id: str = Query(default=None),
+    no_batch: bool = Query(default=False),
     sort_by: str = Query(default="confidence"),
     sort_dir: str = Query(default="asc"),
     limit: int = Query(default=200),
 ):
     return db.get_predictions(
-        review_status=review_status, label=label, source=source, batch_id=batch_id,
+        review_status=review_status, label=label, source=source, batch_id=batch_id, no_batch=no_batch,
         sort_by=sort_by, sort_dir=sort_dir, limit=limit,
     )
 

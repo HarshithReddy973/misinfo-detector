@@ -184,76 +184,137 @@ with tab_batch:
 
 
 # ============================================================
-# TAB 3 — Review Queue (human-in-the-loop)
+# TAB 3 — Review Queue (human-in-the-loop), grouped by batch
 # ============================================================
 with tab_queue:
-    st.caption("Prioritized queue of analyzed content. Sorted by confidence ascending by default — "
-               "the items the model is LEAST sure about surface first, since those need review most.")
+    if "selected_group" not in st.session_state:
+        st.session_state["selected_group"] = None  # None = show the group list
 
-    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
-    with filter_col1:
-        f_status = st.selectbox("Review status", ["(any)", "pending", "confirmed", "dismissed", "relabeled"])
-    with filter_col2:
-        f_label = st.selectbox("Predicted label", ["(any)", "real", "fake", "uncertain"])
-    with filter_col3:
-        f_source = st.text_input("Source contains", placeholder="e.g. blog")
-    with filter_col4:
-        f_sort = st.selectbox("Sort by", ["confidence", "created_at", "label", "source"])
+    # ---- Group list view ----
+    if st.session_state["selected_group"] is None:
+        st.caption("Every CSV batch (and single-analysis submissions) forms its own group. "
+                   "Open a group to review its items.")
 
-    params = {"sort_by": f_sort, "sort_dir": "asc", "limit": 100}
-    if f_status != "(any)":
-        params["review_status"] = f_status
-    if f_label != "(any)":
-        params["label"] = f_label
-    if f_source:
-        params["source"] = f_source
+        if st.button("Refresh groups"):
+            st.rerun()
 
-    if st.button("Refresh queue"):
-        st.rerun()
+        try:
+            resp = requests.get(f"{API_URL}/batches", timeout=30)
+            resp.raise_for_status()
+            groups = resp.json()
+        except requests.exceptions.ConnectionError:
+            st.error(f"Can't reach the API at {API_URL}.")
+            groups = []
+        except Exception as e:
+            st.error(f"Couldn't load groups: {e}")
+            groups = []
 
-    try:
-        resp = requests.get(f"{API_URL}/queue", params=params, timeout=30)
-        resp.raise_for_status()
-        items = resp.json()
-    except requests.exceptions.ConnectionError:
-        st.error(f"Can't reach the API at {API_URL}.")
-        items = []
-    except Exception as e:
-        st.error(f"Couldn't load queue: {e}")
-        items = []
+        if not groups:
+            st.info("No analyzed content yet — run something in Single Analysis or Batch Analysis first.")
 
-    st.caption(f"{len(items)} item(s)")
+        for g in groups:
+            with st.container(border=True):
+                name = g["filename"] or "(unnamed batch)"
+                when = f" · {g['submitted_at'][:19]}" if g.get("submitted_at") else ""
+                st.write(f"**{name}**{when}")
 
-    for item in items:
-        status_emoji = {"pending": "🕒", "confirmed": "✅", "dismissed": "🚫", "relabeled": "✏️"}.get(item["review_status"], "")
-        label_emoji = {"real": "✅", "fake": "🚩", "uncertain": "❓"}.get(item["label"], "")
-        header = f"{status_emoji} {label_emoji} **{item['label'].upper()}** ({item['confidence']:.0%}) — {item['text'][:80]}..."
+                counts_col, action_col = st.columns([4, 1])
+                with counts_col:
+                    label_counts = g["label_counts"]
+                    status_counts = g["status_counts"]
+                    label_str = " · ".join(f"{k}: {v}" for k, v in label_counts.items())
+                    pending = status_counts.get("pending", 0)
+                    st.caption(f"{g['total_items']} item(s)  ·  {label_str}  ·  {pending} pending review")
+                with action_col:
+                    if st.button("Open →", key=f"open_{g['id'] or 'none'}", use_container_width=True):
+                        st.session_state["selected_group"] = g["id"] if g["id"] else "__NONE__"
+                        st.session_state["selected_group_name"] = name
+                        st.rerun()
 
-        with st.expander(header):
-            st.write(f"**Source:** {item['source'] or '(none)'}  |  **Author:** {item['author'] or '(none)'}")
-            st.write(f"**Full text:** {item['text']}")
-            st.write(f"**Review status:** `{item['review_status']}`  |  **Review priority:** `{item['review_priority']}`")
+    # ---- Drill-in view: items within one selected group ----
+    else:
+        selected = st.session_state["selected_group"]
+        group_name = st.session_state.get("selected_group_name", "")
 
-            detail_resp = requests.get(f"{API_URL}/predictions/{item['id']}", timeout=10)
-            history = detail_resp.json().get("feedback_history", []) if detail_resp.ok else []
-            if history:
-                st.write("**Feedback history:**")
-                for h in history:
-                    label_note = f" → relabeled as `{h['corrected_label']}`" if h.get("corrected_label") else ""
-                    st.caption(f"- `{h['action']}`{label_note} {('— ' + h['note']) if h.get('note') else ''} ({h['created_at']})")
+        back_col, title_col = st.columns([1, 5])
+        with back_col:
+            if st.button("← Back to groups"):
+                st.session_state["selected_group"] = None
+                st.rerun()
+        with title_col:
+            st.write(f"**Reviewing: {group_name}**")
 
-            fb_col1, fb_col2, fb_col3 = st.columns(3)
-            with fb_col1:
-                if st.button("✅ Confirm", key=f"confirm_{item['id']}", use_container_width=True):
-                    requests.post(f"{API_URL}/predictions/{item['id']}/feedback", json={"action": "confirm"})
-                    st.rerun()
-            with fb_col2:
-                if st.button("🚫 Dismiss", key=f"dismiss_{item['id']}", use_container_width=True):
-                    requests.post(f"{API_URL}/predictions/{item['id']}/feedback", json={"action": "dismiss"})
-                    st.rerun()
-            with fb_col3:
-                relabel_target = "real" if item["label"] != "real" else "fake"
-                if st.button(f"✏️ Relabel as {relabel_target}", key=f"relabel_{item['id']}", use_container_width=True):
-                    requests.post(f"{API_URL}/predictions/{item['id']}/feedback",
-                                  json={"action": "relabel", "corrected_label": relabel_target})
-                    st.rerun()
+        st.caption("Sorted by confidence ascending by default — the items the model is LEAST sure "
+                   "about surface first, since those need review most.")
+
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+        with filter_col1:
+            f_status = st.selectbox("Review status", ["(any)", "pending", "confirmed", "dismissed", "relabeled"])
+        with filter_col2:
+            f_label = st.selectbox("Predicted label", ["(any)", "real", "fake", "uncertain"])
+        with filter_col3:
+            f_source = st.text_input("Source contains", placeholder="e.g. blog")
+        with filter_col4:
+            f_sort = st.selectbox("Sort by", ["confidence", "created_at", "label", "source"])
+
+        params = {"sort_by": f_sort, "sort_dir": "asc", "limit": 200}
+        if selected == "__NONE__":
+            params["no_batch"] = True
+        else:
+            params["batch_id"] = selected
+        if f_status != "(any)":
+            params["review_status"] = f_status
+        if f_label != "(any)":
+            params["label"] = f_label
+        if f_source:
+            params["source"] = f_source
+
+        if st.button("Refresh items"):
+            st.rerun()
+
+        try:
+            resp = requests.get(f"{API_URL}/queue", params=params, timeout=30)
+            resp.raise_for_status()
+            items = resp.json()
+        except requests.exceptions.ConnectionError:
+            st.error(f"Can't reach the API at {API_URL}.")
+            items = []
+        except Exception as e:
+            st.error(f"Couldn't load queue: {e}")
+            items = []
+
+        st.caption(f"{len(items)} item(s) in this group")
+
+        for item in items:
+            status_emoji = {"pending": "🕒", "confirmed": "✅", "dismissed": "🚫", "relabeled": "✏️"}.get(item["review_status"], "")
+            label_emoji = {"real": "✅", "fake": "🚩", "uncertain": "❓"}.get(item["label"], "")
+            header = f"{status_emoji} {label_emoji} **{item['label'].upper()}** ({item['confidence']:.0%}) — {item['text'][:80]}..."
+
+            with st.expander(header):
+                st.write(f"**Source:** {item['source'] or '(none)'}  |  **Author:** {item['author'] or '(none)'}")
+                st.write(f"**Full text:** {item['text']}")
+                st.write(f"**Review status:** `{item['review_status']}`  |  **Review priority:** `{item['review_priority']}`")
+
+                detail_resp = requests.get(f"{API_URL}/predictions/{item['id']}", timeout=10)
+                history = detail_resp.json().get("feedback_history", []) if detail_resp.ok else []
+                if history:
+                    st.write("**Feedback history:**")
+                    for h in history:
+                        label_note = f" → relabeled as `{h['corrected_label']}`" if h.get("corrected_label") else ""
+                        st.caption(f"- `{h['action']}`{label_note} {('— ' + h['note']) if h.get('note') else ''} ({h['created_at']})")
+
+                fb_col1, fb_col2, fb_col3 = st.columns(3)
+                with fb_col1:
+                    if st.button("✅ Confirm", key=f"confirm_{item['id']}", use_container_width=True):
+                        requests.post(f"{API_URL}/predictions/{item['id']}/feedback", json={"action": "confirm"})
+                        st.rerun()
+                with fb_col2:
+                    if st.button("🚫 Dismiss", key=f"dismiss_{item['id']}", use_container_width=True):
+                        requests.post(f"{API_URL}/predictions/{item['id']}/feedback", json={"action": "dismiss"})
+                        st.rerun()
+                with fb_col3:
+                    relabel_target = "real" if item["label"] != "real" else "fake"
+                    if st.button(f"✏️ Relabel as {relabel_target}", key=f"relabel_{item['id']}", use_container_width=True):
+                        requests.post(f"{API_URL}/predictions/{item['id']}/feedback",
+                                      json={"action": "relabel", "corrected_label": relabel_target})
+                        st.rerun()

@@ -132,10 +132,11 @@ def _main_signal_direction(result):
     return "real" if value > 0 else ("fake" if value < 0 else "neutral")
 
 
-def get_predictions(review_status=None, label=None, source=None, batch_id=None,
+def get_predictions(review_status=None, label=None, source=None, batch_id=None, no_batch=False,
                      sort_by="confidence", sort_dir="asc", limit=200):
     """For the reviewer queue. Sorting by confidence ascending surfaces the
-    lowest-confidence (most-in-need-of-review) items first by default."""
+    lowest-confidence (most-in-need-of-review) items first by default.
+    no_batch=True overrides batch_id and returns only ungrouped single-analysis items."""
     conn = _connect()
     query = "SELECT * FROM predictions WHERE 1=1"
     params = []
@@ -148,7 +149,9 @@ def get_predictions(review_status=None, label=None, source=None, batch_id=None,
     if source:
         query += " AND source LIKE ?"
         params.append(f"%{source}%")
-    if batch_id:
+    if no_batch:
+        query += " AND batch_id IS NULL"
+    elif batch_id:
         query += " AND batch_id = ?"
         params.append(batch_id)
 
@@ -201,6 +204,39 @@ def add_feedback(prediction_id: str, action: str, corrected_label: str = None, n
     conn.commit()
     conn.close()
     return feedback_id
+
+
+def _batch_stats(conn, batch_id):
+    if batch_id is None:
+        rows = conn.execute("SELECT label, review_status FROM predictions WHERE batch_id IS NULL").fetchall()
+    else:
+        rows = conn.execute("SELECT label, review_status FROM predictions WHERE batch_id = ?", (batch_id,)).fetchall()
+    label_counts, status_counts = {}, {}
+    for r in rows:
+        label_counts[r["label"]] = label_counts.get(r["label"], 0) + 1
+        status_counts[r["review_status"]] = status_counts.get(r["review_status"], 0) + 1
+    return {"total_items": len(rows), "label_counts": label_counts, "status_counts": status_counts}
+
+
+def get_batches():
+    """Returns every batch upload plus a pseudo-group for ungrouped single-analysis
+    items (batch_id IS NULL), each with item/label/review-status counts. Used to
+    render the Review Queue's group list before drilling into one."""
+    conn = _connect()
+    batch_rows = conn.execute("SELECT id, filename, submitted_at FROM batches ORDER BY submitted_at DESC").fetchall()
+    batches = []
+    for b in batch_rows:
+        stats = _batch_stats(conn, b["id"])
+        if stats["total_items"] == 0:
+            continue
+        batches.append({"id": b["id"], "filename": b["filename"], "submitted_at": b["submitted_at"], **stats})
+
+    single_stats = _batch_stats(conn, None)
+    if single_stats["total_items"] > 0:
+        batches.append({"id": None, "filename": "(Single Analysis — ungrouped)", "submitted_at": None, **single_stats})
+
+    conn.close()
+    return batches
 
 
 def get_batch_summary(batch_id: str):
