@@ -2,10 +2,13 @@ venv/
 __pycache__/
 *.pyc
 data/raw/
-data/processed/
+data/processed/*
+!data/processed/
+!data/processed/train_features.parquet
 data/app.db
 data/app.db-*
 .env
 *.pt
 *.pkl
 .DS_Store
+

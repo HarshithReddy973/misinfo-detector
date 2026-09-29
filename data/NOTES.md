@@ -1,191 +1,138 @@
 # Data Notes — Misinformation Detector
 
-This file documents the main data sources, cleaning, standardization, splitting, and feature-generation steps used by **Misinformation Detector**.
-
-For the application and model details, see the root `README.md`.
+This document describes the datasets, preprocessing, feature structure, data splitting, credibility features, and data artifacts used by the Misinformation Detector.
 
 ---
 
-## 1. Datasets
+# 1. Datasets
 
-Three datasets are used:
+The project combines multiple misinformation-related datasets.
 
-* **FakeNewsNet** — news articles with available source and social/engagement metadata.
-* **LIAR** — short political statements with six truthfulness labels.
-* **ISOT Fake News Dataset** — news articles directly labeled as fake or real.w
+## FakeNewsNet
 
-The original datasets have different formats and metadata, so each is cleaned separately before being converted to a common schema.
+FakeNewsNet provides fake and real news articles together with source and author information where available.
 
----
+## LIAR
 
-## 2. Label Processing
+LIAR contains short political statements with multiple truthfulness labels.
 
-The system uses a binary classification setup:
+The current preprocessing maps:
 
 ```text
-fake
-real
-```
-
-### LIAR
-
-Original labels:
-
-```text
-pants-fire
-false
-barely-true
-half-true
-mostly-true
-true
-```
-
-Mapping used:
-
-```text
-pants-fire  → fake
-false       → fake
+pants-fire → fake
+false → fake
 
 mostly-true → real
-true        → real
-
-barely-true → removed
-half-true   → removed
+true → real
 ```
 
-half-true , barely-true is excluded because the current model is designed for binary real/fake classification.
-
-### ISOT
+The following labels are excluded:
 
 ```text
-Fake → fake
-Real → real
+barely-true
+half-true
 ```
 
-### FakeNewsNet
+## ISOT
 
-The available fake/real labels are standardized to:
+The ISOT Fake News Dataset contains articles labeled as fake or real.
+
+---
+
+# 2. Label Processing
+
+The project uses a binary target:
 
 ```text
-fake
-real
+Real
+Fake
 ```
 
----
-
-## 3. Common Schema
-
-All datasets are converted into a common structure before merging.
-
-Important columns include:
-
-| Column           | Purpose                                   |
-| ---------------- | ----------------------------------------- |
-| `id`             | Internal identifier                       |
-| `item_id`        | Original dataset identifier               |
-| `text`           | Cleaned text                              |
-| `raw_text`       | Original text used for feature generation |
-| `title`          | Title, when available                     |
-| `source`         | Publisher/source, when available          |
-| `author`         | Author, when available                    |
-| `timestamp`      | Timestamp, when available                 |
-| `label`          | `real` or `fake`                          |
-| `share_count`    | Available engagement information          |
-| `reply_count`    | Available engagement information          |
-| `dataset_source` | Original dataset                          |
-| `official_split` | Original split, when available            |
-
-Missing information is left unavailable rather than artificially generated.
+Dataset-specific labels are converted into this common representation so that the datasets can be combined into a common dataset.
 
 ---
 
-## 4. Cleaning Process
+# 3. Common Data Schema
 
-Each dataset has its own cleaning script because the raw formats differ.
+After dataset-specific preprocessing, the datasets use a common structure.
 
-General flow:
+Important fields include:
 
 ```text
-Raw Dataset
-    ↓
-Dataset-specific cleaning
-    ↓
-Label conversion
-    ↓
-Column standardization
-    ↓
-Common schema
-    ↓
-Cleaned Parquet
+text
+title
+source
+author
+label
 ```
 
-Cleaning includes:
-
-* Reading the original files
-* Extracting relevant fields
-* Removing unusable/invalid records
-* Standardizing labels
-* Standardizing column types
-* Preserving available metadata
-* Assigning `dataset_source`
+Additional dataset-specific fields may exist in the intermediate datasets.
 
 ---
 
-## 5. Text Fields
+# 4. Data Processing
 
-Two text fields are retained:
-
-### `raw_text`
-
-Original text preserved for feature generation.
-
-This is important because capitalization, punctuation and writing style are part of the linguistic signal.
-
-### `text`
-
-Cleaned text retained in the unified dataset.
-
-**Important:** The current feature-generation pipeline uses `raw_text`, not the cleaned `text` field, for the main linguistic features.
-
-For semantic embeddings, a lightly normalized version of `raw_text` is used with URLs removed and whitespace normalized.
-
----
-
-## 6. Merging
-
-After individual cleaning, the datasets are merged into a unified dataset:
+The datasets follow the general processing flow:
 
 ```text
-FakeNewsNet ──┐
-LIAR ─────────┼──→ combined_clean.parquet
-ISOT ─────────┘
+Raw Datasets
+    ↓
+Dataset-specific Cleaning
+    ↓
+Column Standardization
+    ↓
+Text Cleaning
+    ↓
+Label Standardization
+    ↓
+Common Schema
+    ↓
+Dataset Merge
+    ↓
+Train / Validation / Test Split
 ```
 
-`dataset_source` is retained for traceability.
+The cleaned and processed datasets are available in the Google Drive folder linked below.
 
 ---
 
-## 7. Dataset Splitting
+# 5. Raw Text and Model Text
 
-The unified data is divided into:
+Where applicable:
 
 ```text
-train.parquet
-valid.parquet
-test.parquet
+raw_text
 ```
 
-* **Train:** model training and training-dependent statistics.
-* **Validation:** development and model evaluation.
-* **Test:** final evaluation.
+stores the original article text, while:
 
-Ambiguous LIAR records excluded from the binary dataset are kept separately for the calibration/evaluation workflow where applicable.
+```text
+text
+```
+
+is the standardized text used by the model pipeline.
 
 ---
 
-## 8. Credibility Features
+# 6. Train / Validation / Test Data
 
-Source and author information is converted into four features:
+The merged dataset is divided into:
+
+```text
+Training
+Validation
+Test
+```
+
+The complete split datasets are available in the Google Drive `processed/` folder.
+
+---
+
+# 7. Credibility Features
+
+The model uses source and author history as additional features.
+
+The four credibility features are:
 
 ```text
 source_fake_ratio
@@ -194,92 +141,75 @@ author_fake_ratio
 author_known
 ```
 
-The fake ratios represent the historical proportion of fake-labeled training records associated with a source or author.
+### Source Fake Ratio
 
-### Leakage Control
+Historical proportion of fake examples associated with a source in the training data.
 
-Credibility lookups are fitted **using training data only**.
+### Source Known
 
-```text
-Training data
-      ↓
-Source/author statistics
-      ↓
-credibility_lookups.json
-      ↓
-Applied to validation/test/inference
-```
+Indicates whether the source exists in the training-derived lookup.
 
-Validation and test labels are never used to create these lookup statistics.
+### Author Fake Ratio
 
-### Unknown Source/Author
+Historical proportion of fake examples associated with an author in the training data.
 
-If a source or author is not present in the training lookup:
+### Author Known
 
-```text
-fake_ratio = training global fake ratio
-known = 0
-```
-
-This allows missing or unseen metadata to be handled without inventing historical information.
+Indicates whether the author exists in the training-derived lookup.
 
 ---
 
-## 9. Feature Generation
+# 8. Leakage Control
 
-After splitting, features are generated independently for each split.
+Credibility statistics are based on training data so that validation and test examples do not directly influence the credibility lookup.
 
-### Feature composition
+Unknown sources and authors use training-set fallback values.
+
+---
+
+# 9. Feature Structure
+
+The final model uses:
 
 ```text
-17 Linguistic Features
-        +
-384 Semantic Embedding Features
-        +
-4 Credibility Features
-        =
-405 Model Features
+17 linguistic features
++ 384 semantic features
++ 4 credibility features
+--------------------------------
+= 405 total features
 ```
 
 ### Linguistic Features
 
-The 17 features include:
-
 ```text
-word_count
-char_count
-sentence_count
-avg_sentence_len
-avg_word_len
-vocab_diversity
-punct_density
-caps_density
-exclam_count
-question_count
-url_count
-hashtag_count
-mention_count
-hedging_count
-sentiment_compound
+word count
+character count
+sentence count
+average sentence length
+average word length
+vocabulary diversity
+punctuation density
+capitalization density
+exclamation count
+question count
+URL count
+hashtag count
+mention count
+hedging count
+sentiment
 subjectivity
 readability
 ```
 
-Sentiment, subjectivity, and readability calculations use the available text-processing libraries. For long articles, these calculations are limited to the first 2,000 characters for efficiency.
-
 ### Semantic Features
 
-Semantic representation is generated using:
+Semantic features use:
 
 ```text
 all-MiniLM-L6-v2
 ```
 
-Output:
-
-```text
-384-dimensional embedding
-```
+which produces 384-dimensional embeddings.
 
 ### Credibility Features
 
@@ -292,104 +222,189 @@ author_known
 
 ---
 
-## 10. Feature Files and Artifacts
+# 10. Data and Feature Files
 
-Main generated files:
+The complete processed data is available through the public Google Drive folder:
 
-```text
-train_features.parquet
-valid_features.parquet
-test_features.parquet
-credibility_lookups.json
-feature_manifest.json
-```
+**[Complete - DATASETS](https://drive.google.com/drive/folders/1XyAvQ3e9YdKo9HzdqpEp5YydTBwMR4b9?usp=sharing)**
 
-### `feature_manifest.json`
-
-Stores the feature order and block structure used by the model and inference pipeline.
-
-### `credibility_lookups.json`
-
-Stores the training-derived source and author fake-ratio dictionaries.
-
----
-
-## 11. Data Flow
+The Google Drive `processed/` folder contains:
 
 ```text
-Raw datasets
-     ↓
-Dataset-specific cleaning
-     ↓
-Label standardization
-     ↓
-Common schema
-     ↓
-Merge
-     ↓
-Train / Validation / Test
-     ↓
-Feature Generation
-     ↓
-405 Features
-     ↓
-Model Training / Inference
-```
-
----
-
-## 12. Important Data Considerations
-
-* `raw_text` is used for the main linguistic features.
-* `dataset_source` is **not used as a model feature**, since it could allow the model to learn dataset identity instead of misinformation patterns.
-* `label` is the target and is not included as a model feature.
-* Credibility statistics use training data only to avoid leakage.
-* Unknown sources/authors use the training global fake ratio with `*_known = 0`.
-* `title` is retained in the unified data but is not currently used by the feature-generation module.
-* `timestamp` is not currently used as a model feature.
-* `share_count` and `reply_count` are not currently used as model features; in the current processed data they do not provide useful variation.
-* Missing metadata is not artificially filled with fabricated information.
-
----
-
-## 13. Main Data Outputs
-
-```text
-data/
-├── raw/
-│   ├── FakeNewsNet/
-│   ├── ISOT-dataset/
-│   └── LIAR-dataset/
+processed/
+├── features/
+│   ├── train_features.parquet
+│   ├── valid_features.parquet
+│   └── test_features.parquet
 │
-├── processed/
-│   ├── combined_clean.parquet
-│   ├── train.parquet
-│   ├── valid.parquet
-│   ├── test.parquet
-│   └── ...
-│
-├── credibility_lookups.json
-└── feature_manifest.json
+├── calibration_eval.parquet
+├── combined_clean.parquet
+├── fakenewsnet_main_clean.parquet
+├── isot_clean.parquet
+├── liar_clean.parquet
+├── train.parquet
+├── valid.parquet
+└── test.parquet
 ```
 
-The exact file names or locations may change as the project evolves.
+The `features/` directory contains the complete feature files.
+
+The complete files are provided for:
+
+* Reference
+* Reproducibility
+* Further experimentation
+* Inspecting processed data and generated features
+
+They are **not required to run the application**.
 
 ---
 
-## 14. Dataset References
+# 11. GitHub Application Feature File
 
-* **FakeNewsNet:**
-  https://www.kaggle.com/datasets/mdepak/fakenewsnet
-
-* **LIAR:**
-  https://www.kaggle.com/datasets/doanquanvietnamca/liar-dataset
-
-* **ISOT Fake News Dataset:**
-
-       https://www.kaggle.com/datasets/rahulogoel/isot-fake-news-dataset
-
-For the complete application documentation, see:
+The GitHub repository contains a trimmed version of the training feature file:
 
 ```text
-../README.md
+data/processed/train_features.parquet
+```
+
+This file contains **100 rows** and is used as the SHAP background dataset.
+
+The complete version is available in Google Drive at:
+
+```text
+processed/features/train_features.parquet
+```
+
+Therefore:
+
+```text
+GitHub
+└── data/processed/train_features.parquet
+    └── 100 rows → application SHAP background
+
+Google Drive
+└── processed/features/train_features.parquet
+    └── Complete training feature dataset
+```
+
+The complete training feature file is not required for the application.
+
+---
+
+# 12. SHAP Background Data
+
+The application uses the 100-row GitHub feature file:
+
+```text
+data/processed/train_features.parquet
+```
+
+as its SHAP background dataset.
+
+The SHAP flow is:
+
+```text
+100-row train_features.parquet
+          ↓
+   SHAP background data
+          ↓
+     SHAP Explainer
+          ↓
+   Explain prediction
+          ↓
+Linguistic / Semantic / Credibility
+```
+
+If the 100-row file is missing:
+
+```text
+Prediction       → works
+Probability      → works
+Confidence       → works
+Review priority  → works
+SHAP             → skipped
+```
+
+---
+
+# 13. Complete Data Flow
+
+```text
+Raw Datasets
+     ↓
+Dataset Cleaning
+     ↓
+Label Standardization
+     ↓
+Common Schema
+     ↓
+Dataset Merge
+     ↓
+Train / Validation / Test Split
+     ↓
+Feature Data
+     ↓
+Model Training
+     ↓
+Calibrated Model
+     ↓
+Application Inference
+     ↓
+Prediction + Confidence + SHAP
+```
+
+The complete intermediate and feature files are available in Google Drive for reference.
+
+---
+
+# 14. Important Data Considerations
+
+### Raw Datasets
+
+Complete raw datasets are available through the public Google Drive folder.
+
+### Processed Datasets
+
+Complete processed datasets and feature files are also available through Google Drive.
+
+They are not required to run the already-trained application.
+
+### Application Feature File
+
+The only processed feature file required by the application is:
+
+```text
+data/processed/train_features.parquet
+```
+
+The GitHub version contains 100 rows for SHAP background data.
+
+### Feature Ordering
+
+The model expects the same feature ordering used during training.
+
+The `feature_manifest.json` file describes the feature structure used by the model.
+
+---
+
+# 15. Dataset References
+
+The project uses:
+
+* FakeNewsNet
+* LIAR
+* ISOT Fake News Dataset
+
+---
+
+# 16. Related Application Files
+
+```text
+model/inference.py
+app/app.py
+api/main.py
+data/credibility_lookups.json
+data/feature_manifest.json
+models/calibrated_model.joblib
 ```

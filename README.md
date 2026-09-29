@@ -16,7 +16,7 @@ Analyze an individual article or post using:
 * Source — optional
 * Author — optional
 
-The system returns:
+Returns:
 
 * Real / Fake prediction
 * Confidence score
@@ -24,11 +24,11 @@ The system returns:
 * Probability of Fake
 * Review priority
 * Source and author credibility information
-* SHAP-based explanation when feature data is available
+* SHAP-based explanation
 
 ### Batch Analysis
 
-Upload a CSV file to analyze multiple articles at once.
+Upload a CSV file for analyzing multiple articles.
 
 Required column:
 
@@ -50,11 +50,7 @@ text,title,source,author
 "Another article","Second Article","",""
 ```
 
-The system scores every row and provides aggregate results along with CSV export.
-
 ### Human Review Queue
-
-The Review Queue allows reviewers to inspect analyzed content.
 
 Reviewers can:
 
@@ -62,81 +58,59 @@ Reviewers can:
 * Dismiss a prediction
 * Relabel an item
 
-Reviewer actions are stored separately in an append-only feedback table.
-
-The original model prediction is never overwritten.
+Reviewer actions are stored separately from the original model prediction.
 
 ---
 
 # System Architecture
 
 ```text
-                    User
-                     │
-          ┌──────────┴──────────┐
-          │                     │
-   Single Article          CSV Batch
-          │                     │
-          └──────────┬──────────┘
-                     │
-                     ▼
-              Streamlit UI
-                     │
-                  HTTP
-                     │
-                     ▼
-                FastAPI
-                     │
-                     ▼
-             Inference Module
-                     │
-                     ▼
-              Trained Model
-                     │
-          ┌──────────┼──────────┐
-          ▼          ▼          ▼
-      Prediction  Confidence   SHAP
-          │          │          │
-          └──────────┼──────────┘
-                     │
-                     ▼
-                Final Result
-                     │
-                     ▼
-                 SQLite DB
+User
+  ↓
+Single Article / CSV Batch
+  ↓
+Streamlit UI
+  ↓ HTTP
+FastAPI Backend
+  ↓
+Inference Module
+  ↓
+Trained Model
+  ↓
+Prediction / Confidence / SHAP
+  ↓
+Final Result
+  ↓
+SQLite Database
 ```
 
 ### Main Components
 
-| Component      | Technology                     | Purpose                           |
-| -------------- | ------------------------------ | --------------------------------- |
-| Frontend       | Streamlit                      | User interface                    |
-| Backend        | FastAPI                        | API and application logic         |
-| Inference      | Python                         | Centralized prediction pipeline   |
-| Model          | Calibrated Logistic Regression | Classification                    |
-| Embeddings     | `all-MiniLM-L6-v2`             | Semantic representation           |
-| Explainability | SHAP                           | Prediction explanations           |
-| Database       | SQLite                         | Predictions and reviewer feedback |
+| Component                      | Purpose                        |
+| ------------------------------ | ------------------------------ |
+| Streamlit                      | Frontend and user interface    |
+| FastAPI                        | Backend API                    |
+| `model/inference.py`           | Centralized inference pipeline |
+| Calibrated Logistic Regression | Primary classification model   |
+| `all-MiniLM-L6-v2`             | Semantic text embeddings       |
+| SHAP                           | Model explanation              |
+| SQLite                         | Prediction and review storage  |
 
 ---
 
 # Machine Learning
 
-The primary model is a **Calibrated Logistic Regression** classifier.
-
-The model uses three feature groups:
+The model uses **405 features**:
 
 ```text
-17 Linguistic Features
-        +
-384 Semantic Features
-        +
-4 Credibility Features
-        =
-405 Model Features
+17 linguistic features
++ 384 semantic embedding features
++ 4 credibility features
+--------------------------------
+= 405 features
 ```
 
-## Linguistic Features
+### Linguistic Features
 
 The 17 linguistic features include:
 
@@ -158,21 +132,17 @@ The 17 linguistic features include:
 * Subjectivity
 * Readability
 
-These features capture writing style and surface-level characteristics.
+### Semantic Features
 
-## Semantic Features
-
-The system uses:
+Semantic representations are generated using:
 
 ```text
 all-MiniLM-L6-v2
 ```
 
-to generate a **384-dimensional semantic embedding** for the input text.
+This produces a **384-dimensional embedding** for the article text.
 
-## Credibility Features
-
-The model also uses:
+### Credibility Features
 
 ```text
 source_fake_ratio
@@ -181,134 +151,143 @@ author_fake_ratio
 author_known
 ```
 
-These provide historical source/author signals when such information is available.
-
-Credibility information is treated as additional evidence rather than proof that an article is true or false.
+Unknown sources and authors use training-set fallback values.
 
 ---
 
 # Prediction and Confidence
 
-The model is trained on two classes:
+The model performs binary classification:
 
 ```text
-Real
-Fake
+Real / Fake
 ```
 
-The class with the higher probability becomes the raw prediction.
+The class with the highest predicted probability becomes the raw prediction.
 
-A confidence threshold is then applied:
+For the application UI:
 
 ```text
-Confidence < 0.60
-        │
-        ▼
-   Uncertain
-
-
-Confidence ≥ 0.60
-        │
-        ▼
-   Real / Fake
+Confidence < 0.60 → Uncertain
 ```
 
-`Uncertain` is therefore a **post-prediction display category**, not a third trained class.
+**Uncertain is a post-prediction display category, not a third trained class.**
 
 ---
 
 # Explainability
 
-Misinformation Detector uses **SHAP** to explain model predictions.
+The system uses **SHAP** to explain predictions.
 
-The explanation provides information about signals contributing to the prediction, including:
+Explanations are grouped into:
 
-```text
-Linguistic Signals
-Semantic Signals
-Credibility Signals
-```
+* Linguistic
+* Semantic
+* Credibility
 
-The system can also identify influential individual linguistic features.
+## SHAP Background File
 
-SHAP explanations describe the behavior of the trained model; they do not independently verify the factual claims in an article.
-
-### SHAP Data Requirement
-
-SHAP explanations require:
+The application requires:
 
 ```text
 data/processed/train_features.parquet
 ```
 
-If this file is unavailable, **predictions still work**, but the explanation section is not generated.
+The version included in this repository contains **100 training-feature rows** and is used as the SHAP background dataset.
+
+After cloning, this file must be present at exactly:
+
+```text
+data/processed/train_features.parquet
+```
+
+If it is missing:
+
+* Predictions still work
+* Probabilities and confidence still work
+* Review priority still works
+* SHAP explanations are skipped
+* The **"Why this prediction?"** section will not render
+
+The original complete training feature file is much larger and is available separately through Google Drive.
+
+---
+
+# Complete Datasets and Processed Files
+
+The complete datasets and processed files used during development are provided through a public Google Drive folder.
+
+**Google Drive:** [Complete - DATASETS](https://drive.google.com/drive/folders/1XyAvQ3e9YdKo9HzdqpEp5YydTBwMR4b9?usp=sharing)
+
+The Google Drive folder contains the complete data used during development, including raw datasets and processed files.
+
+The processed folder is organized as:
+
+```text
+processed/
+├── features/
+│   ├── train_features.parquet
+│   ├── valid_features.parquet
+│   └── test_features.parquet
+│
+├── calibration_eval.parquet
+├── combined_clean.parquet
+├── fakenewsnet_main_clean.parquet
+├── isot_clean.parquet
+├── liar_clean.parquet
+├── train.parquet
+├── valid.parquet
+└── test.parquet
+```
+
+The complete processed files are provided for:
+
+* Reference
+* Reproducibility
+* Further experimentation
+* Inspecting the processed datasets and generated features
+
+They are **not required to run the application**.
+
+### GitHub vs Google Drive
+
+The important distinction is:
+
+```text
+GitHub
+└── data/processed/train_features.parquet
+    └── 100 rows → used by SHAP
+
+Google Drive
+└── processed/features/train_features.parquet
+    └── Complete original training feature dataset
+```
+
+The GitHub version is intentionally trimmed to 100 rows for the application's SHAP background.
+
+The complete feature files are available only through the Google Drive dataset folder.
 
 ---
 
 # Inference Pipeline
 
-The main prediction logic is centralized in:
+All predictions are handled through:
 
 ```text
 model/inference.py
 ```
 
-The inference module:
+The pipeline:
 
-1. Receives article text and optional metadata.
-2. Generates the required features.
-3. Loads the trained model.
-4. Produces Real/Fake probabilities.
-5. Determines the prediction.
-6. Calculates confidence.
-7. Determines review priority.
-8. Generates the SHAP explanation when the required feature data is available.
+1. Receives article text, source, and author
+2. Generates the required model features
+3. Runs the trained model
+4. Calculates class probabilities
+5. Calculates confidence
+6. Determines review priority
+7. Generates SHAP explanations using the 100-row background file
 
-Both single-article and batch analysis use the same inference pipeline.
-
----
-
-# Data Pipeline
-
-The project combines multiple misinformation datasets and converts them into a common schema.
-
-The general pipeline is:
-
-```text
-Raw Datasets
-      ↓
-Dataset-specific Cleaning
-      ↓
-Label Standardization
-      ↓
-Common Schema
-      ↓
-Merge
-      ↓
-Train / Validation / Test Split
-      ↓
-Feature Generation
-      ↓
-Model Training
-```
-
-The detailed data documentation is available in:
-
-```text
-data/NOTES.md
-```
-
-It covers:
-
-* Dataset sources
-* Label processing
-* Cleaning
-* Common schema
-* Merging
-* Dataset splitting
-* Credibility statistics
-* Feature generation
-* Data outputs
+The same inference pipeline is used for single-article and batch analysis.
 
 ---
 
@@ -317,7 +296,7 @@ It covers:
 ## 1. Clone the Repository
 
 ```bash
-git clone https://github.com/HarshithReddy973/misinfo-detector.git
+git clone "URL of this repo"
 cd misinfo-detector
 ```
 
@@ -343,9 +322,7 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 4. Download Required NLTK Data
-
-Run this once after installation:
+## 4. Download NLTK Resources
 
 ```bash
 python3 -c "import nltk; nltk.download('vader_lexicon'); nltk.download('punkt'); nltk.download('punkt_tab')"
@@ -353,239 +330,150 @@ python3 -c "import nltk; nltk.download('vader_lexicon'); nltk.download('punkt');
 
 ---
 
-# Data Setup
+# Required Application Files
 
-Processed data is not required to be regenerated if you only want to run the application.
-
-The trained model and supporting artifacts are already included in the repository.
-
-If you need to regenerate the processed datasets, place the raw datasets in:
+The following files are required to run the application:
 
 ```text
-data/raw/
+models/calibrated_model.joblib
+data/credibility_lookups.json
+data/feature_manifest.json
+data/processed/train_features.parquet
 ```
 
-Expected locations:
+The last file is the **100-row SHAP background dataset** included in the repository.
 
-```text
-data/raw/
-├── isot/
-├── liar/
-└── fakenewsnet/
-```
-
-Then run the data-processing scripts from the repository root:
-
-```bash
-python data/clean_isot.py
-python data/clean_liar.py
-python data/clean_fakenewsnet_main.py
-python data/merge_all.py
-python data/split_dataset.py
-```
-
-This generates the processed train/validation/test data and calibration data.
-
-The processed data directories are gitignored.
-
-For the complete data-processing details, see:
-
-```text
-data/NOTES.md
-```
+The complete raw and processed datasets are not required for normal application usage.
 
 ---
 
-# Required Model Files
+# Data Setup
 
-The application uses the following trained artifacts:
+No dataset download is required to run the existing application.
 
-```text
-models/
-└── calibrated_model.joblib
+The trained model and required application artifacts are already provided in the repository.
 
-data/
-├── credibility_lookups.json
-└── feature_manifest.json
-```
-
-### `calibrated_model.joblib`
-
-The trained calibrated Logistic Regression model.
-
-### `credibility_lookups.json`
-
-Training-derived source and author credibility statistics.
-
-### `feature_manifest.json`
-
-The feature structure and ordering expected by the model.
-
-These artifacts allow the application to perform inference without retraining the model.
+For reference or further experimentation, the complete datasets are available through the public Google Drive folder documented above.
 
 ---
 
 # Running the Application
 
-The application consists of two services:
+The application uses:
 
-```text
-FastAPI Backend
-       +
-Streamlit Frontend
-```
+* FastAPI backend
+* Streamlit frontend
 
-Run them in **two separate terminals**.
-
-## Terminal 1 — Backend
-
-From the repository root:
+## 1. Start the Backend
 
 ```bash
 cd api
 python -m uvicorn main:app --reload --port 8000
 ```
 
-The backend should start on:
+Backend:
 
 ```text
 http://localhost:8000
 ```
 
-You can verify the API with:
+Health check:
 
 ```bash
 curl http://localhost:8000/
 ```
 
-A successful response should contain a status such as:
+Expected:
 
 ```json
 {"status":"ok"}
 ```
 
-## Terminal 2 — Frontend
+## 2. Start the Frontend
 
-From the repository root:
+From the project root:
 
 ```bash
 streamlit run app/app.py
 ```
 
-The Streamlit application normally runs at:
+Frontend:
 
 ```text
 http://localhost:8501
 ```
 
-Open the URL in your browser.
-
 ---
 
 # Application Workflow
 
-## Single Article
+### Single Article
 
 ```text
-User enters article text
-        ↓
-Optional source / author
-        ↓
-Analyze
-        ↓
-Streamlit
-        ↓
-FastAPI
-        ↓
-Inference Module
-        ↓
-Feature Generation
-        ↓
-Trained Model
-        ↓
-Prediction + Confidence
-        ↓
+Enter Article
+      ↓
+Generate Features
+      ↓
+Model Prediction
+      ↓
+Probability + Confidence
+      ↓
+Review Priority
+      ↓
 SHAP Explanation
-        ↓
-Result
-        ↓
-SQLite
+      ↓
+Store Prediction
+      ↓
+Human Review
 ```
 
-## Batch Analysis
+### Batch Analysis
 
 ```text
-User uploads CSV
-        ↓
-CSV validation
-        ↓
-FastAPI batch endpoint
-        ↓
-Same inference pipeline
-        ↓
-Prediction for every row
-        ↓
-Aggregate results
-        ↓
-CSV export
-        ↓
-SQLite storage
+Upload CSV
+    ↓
+Validate Columns
+    ↓
+Run Inference for Each Article
+    ↓
+Store Results
+    ↓
+Display Batch Results
 ```
-
-## Review Workflow
-
-```text
-Prediction
-     ↓
-Review Queue
-     ↓
-Reviewer Action
-     ↓
-Confirm / Dismiss / Relabel
-     ↓
-Append-only Feedback Log
-```
-
-The original prediction remains unchanged.
 
 ---
 
 # API Endpoints
 
-The FastAPI backend provides endpoints for:
-
-| Endpoint                     | Purpose                  |
-| ---------------------------- | ------------------------ |
-| `/`                          | API health/status        |
-| `/predict`                   | Analyze a single article |
-| `/predict/batch/csv`         | Analyze a CSV batch      |
-| `/queue`                     | Access the review queue  |
-| `/batches`                   | Access batch information |
-| `/predictions/{id}/feedback` | Submit reviewer feedback |
-
-The exact request and response schemas are defined in the API implementation.
+| Endpoint                          | Purpose                    |
+| --------------------------------- | -------------------------- |
+| `GET /`                           | Health check               |
+| `POST /predict`                   | Predict a single article   |
+| `POST /predict/batch/csv`         | Analyze CSV batch          |
+| `GET /queue`                      | Retrieve review queue      |
+| `GET /batches`                    | Retrieve batch information |
+| `POST /predictions/{id}/feedback` | Submit reviewer feedback   |
 
 ---
 
 # Database
 
-The application uses SQLite:
+The application uses:
 
 ```text
 data/app.db
 ```
 
-The database is generated automatically when required.
-
 It stores:
 
 * Predictions
-* Confidence and probability information
+* Confidence
+* Class probabilities
 * Review status
 * Batch information
 * Reviewer feedback
 
-Reviewer feedback is stored separately from the original prediction.
+Reviewer feedback is stored separately so that the original model prediction is not overwritten.
 
 ---
 
@@ -603,12 +491,10 @@ misinfo-detector/
 │
 ├── data/
 │   ├── raw/
+│   │
 │   ├── processed/
-│   ├── clean_isot.py
-│   ├── clean_liar.py
-│   ├── clean_fakenewsnet_main.py
-│   ├── merge_all.py
-│   ├── split_dataset.py
+│   │   └── train_features.parquet   # 100-row SHAP background
+│   │
 │   ├── credibility_lookups.json
 │   ├── feature_manifest.json
 │   ├── app.db
@@ -621,7 +507,6 @@ misinfo-detector/
 │   └── calibrated_model.joblib
 │
 ├── notebooks/
-│
 ├── requirements.txt
 └── README.md
 ```
@@ -630,27 +515,38 @@ misinfo-detector/
 
 # Model Performance
 
-The final Calibrated Logistic Regression model achieved the following results on the prepared validation and test sets:
+## Validation Set
 
-| Dataset Split | Accuracy | Precision | Recall | F1 Score | ROC-AUC |
-| ------------- | -------: | --------: | -----: | -------: | ------: |
-| Validation    |   92.70% |    91.25% | 92.82% |   92.03% |  96.97% |
-| Test          |   93.08% |    92.12% | 92.47% |   92.29% |  97.23% |
+| Metric    |  Score |
+| --------- | -----: |
+| Accuracy  | 92.70% |
+| Precision | 91.25% |
+| Recall    | 92.82% |
+| F1        | 92.03% |
+| ROC-AUC   | 96.97% |
 
-An XGBoost model was also evaluated as a comparison model.
+## Test Set
 
-These results represent performance on the project's prepared datasets and should not be interpreted as guaranteed performance on unseen real-world news.
+| Metric    |  Score |
+| --------- | -----: |
+| Accuracy  | 93.08% |
+| Precision | 92.12% |
+| Recall    | 92.47% |
+| F1        | 92.29% |
+| ROC-AUC   | 97.23% |
+
+An XGBoost comparison model was also evaluated during development.
 
 ---
 
 # Limitations
 
-* The model learns patterns from its training data and may not generalize to every domain or topic.
-* A prediction does not establish the factual truth of an article.
-* Source and author signals depend on available historical metadata.
-* Unknown sources and authors provide limited credibility information.
-* Dataset characteristics can affect measured performance.
-* Human review remains important, especially for uncertain or high-impact content.
+* The model learns patterns from its training data and does not independently verify claims.
+* Predictions should not be treated as definitive fact-checking results.
+* Source and author credibility signals depend on available metadata.
+* Unknown sources and authors have limited historical information.
+* Performance may vary across domains, topics, writing styles, and newer information.
+* Human review remains important for high-impact decisions.
 
 ---
 
@@ -658,43 +554,18 @@ These results represent performance on the project's prepared datasets and shoul
 
 Potential improvements include:
 
-* Adding more diverse and recent datasets
-* Improving source and author verification
-* Incorporating propagation and social-context signals
-* Improving multilingual support
-* Exploring transformer-based classification models
-* Adding external evidence retrieval
-* Improving reviewer analytics
-* Adding model monitoring and drift detection
+* More recent and diverse datasets
+* Improved source and author verification
+* Propagation and social-context features
+* Multilingual support
+* Transformer-based classification models
+* External evidence retrieval
+* Reviewer analytics
+* Model monitoring and drift detection
 
 ---
 
 # Documentation
 
-### Main Documentation
-
-This `README.md` covers:
-
-* System overview
-* Features
-* Architecture
-* Machine-learning pipeline
-* Installation
-* Data setup
-* Application setup
-* API
-* Review workflow
-* Model performance
-* Limitations
-
-### Data Documentation
-
-Detailed information about the datasets and data-processing pipeline is available in:
-
-```text
-data/NOTES.md
-```
-
-### Architecture Diagram
-
-Add the final system architecture diagram in the **System Architecture** section above.
+* `README.md` — application setup, architecture, usage, API, and model information
+* `data/NOTES.md` — dataset sources, preprocessing, feature structure, and data artifacts
